@@ -262,9 +262,6 @@ static void init_or_fini(IOR_test_t *tests, const bool init)
  */
 void aiori_initialize(IOR_test_t *tests)
 {
-        if (is_initialized)
-            return;
-
         init_or_fini(tests, true);
 
         is_initialized = true;
