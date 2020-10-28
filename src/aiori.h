@@ -106,6 +106,7 @@ typedef struct ior_aiori {
         int (*rmdir) (const char *path, aiori_mod_opt_t * module_options);
         int (*access) (const char *path, int mode, aiori_mod_opt_t * module_options);
         int (*stat) (const char *path, struct stat *buf, aiori_mod_opt_t * module_options);
+        int (*rename) (const char *path, const char *new_path, aiori_mod_opt_t * module_options);
         void (*initialize)(aiori_mod_opt_t * options); /* called once per program before MPI is started */
         void (*finalize)(aiori_mod_opt_t * options); /* called once per program after MPI is shutdown */
         option_help * (*get_options)(aiori_mod_opt_t ** init_backend_options, aiori_mod_opt_t* init_values); /* initializes the backend options as well and returns the pointer to the option help structure */

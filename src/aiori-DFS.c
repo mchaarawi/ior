@@ -117,6 +117,7 @@ static void DFS_Sync(aiori_mod_opt_t *);
 static IOR_offset_t DFS_GetFileSize(aiori_mod_opt_t *, char *);
 static int DFS_Statfs (const char *, ior_aiori_statfs_t *, aiori_mod_opt_t *);
 static int DFS_Stat (const char *, struct stat *, aiori_mod_opt_t *);
+static int DFS_Rename (const char *, const char *, aiori_mod_opt_t *);
 static int DFS_Mkdir (const char *, mode_t, aiori_mod_opt_t *);
 static int DFS_Rmdir (const char *, aiori_mod_opt_t *);
 static int DFS_Access (const char *, int, aiori_mod_opt_t *);
@@ -145,6 +146,7 @@ ior_aiori_t dfs_aiori = {
         .rmdir		= DFS_Rmdir,
         .access		= DFS_Access,
         .stat		= DFS_Stat,
+        .rename		= DFS_Rename,
         .get_options	= DFS_options,
         .check_params	= DFS_check_params,
         .enable_mdtest	= true,
@@ -901,5 +903,49 @@ DFS_Stat(const char *path, struct stat *buf, aiori_mod_opt_t * param)
 		free(dir_name);
         if (rc)
                 return -1;
+	return rc;
+}
+
+static int
+DFS_Rename(const char *path, const char *new_path, aiori_mod_opt_t * param)
+{
+        dfs_obj_t *parent = NULL, *new_parent = NULL;
+	char *name = NULL, *dir_name = NULL;
+	char *new_name = NULL, *new_dir_name = NULL;
+	int rc;
+
+	rc = parse_filename(path, &name, &dir_name);
+        DCHECK(rc, "Failed to parse path %s", path);
+
+	rc = parse_filename(new_path, &new_name, &new_dir_name);
+        DCHECK(rc, "Failed to parse path %s", new_path);
+
+	assert(dir_name);
+        assert(name);
+	assert(new_dir_name);
+        assert(new_name);
+
+        parent = lookup_insert_dir(dir_name, NULL);
+        if (parent == NULL)
+                GERR("Failed to lookup parent dir");
+
+        new_parent = lookup_insert_dir(new_dir_name, NULL);
+        if (new_parent == NULL)
+                GERR("Failed to lookup parent dir");
+
+	rc = dfs_move(dfs, parent, name, new_parent, new_name, NULL);
+        DCHECK(rc, "dfs_rename() Failed (%d)", rc);
+
+	if (name)
+		free(name);
+	if (dir_name)
+		free(dir_name);
+	if (new_name)
+		free(new_name);
+	if (new_dir_name)
+		free(new_dir_name);
+        if (rc)
+                return -1;
+
 	return rc;
 }

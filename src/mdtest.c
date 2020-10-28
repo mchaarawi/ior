@@ -97,12 +97,14 @@ static char **filenames;
 static char hostname[MAX_PATHLEN];
 static char mk_name[MAX_PATHLEN];
 static char stat_name[MAX_PATHLEN];
+static char rename_name[MAX_PATHLEN];
 static char read_name[MAX_PATHLEN];
 static char rm_name[MAX_PATHLEN];
 static char unique_mk_dir[MAX_PATHLEN];
 static char unique_chdir_dir[MAX_PATHLEN];
 static char unique_stat_dir[MAX_PATHLEN];
 static char unique_read_dir[MAX_PATHLEN];
+static char unique_rename_dir[MAX_PATHLEN];
 static char unique_rm_dir[MAX_PATHLEN];
 static char unique_rm_uni_dir[MAX_PATHLEN];
 static char *write_buffer;
@@ -113,6 +115,7 @@ static int barriers;
 static int create_only;
 static int stat_only;
 static int read_only;
+static int rename_only;
 static int verify_read;
 static int verify_write;
 static int verification_error;
@@ -184,7 +187,7 @@ typedef struct{
 #define CHECK_STONE_WALL(p) (((p)->stone_wall_timer_seconds != 0) && ((GetTimeStamp() - (p)->start_time) > (p)->stone_wall_timer_seconds))
 
 /* for making/removing unique directory && stating/deleting subdirectory */
-enum {MK_UNI_DIR, STAT_SUB_DIR, READ_SUB_DIR, RM_SUB_DIR, RM_UNI_DIR};
+enum {MK_UNI_DIR, STAT_SUB_DIR, READ_SUB_DIR, RENAME_SUB_DIR, RM_SUB_DIR, RM_UNI_DIR};
 
 /* a helper function for passing debug and verbose messages.
    use the MACRO as it will insert __LINE__ for you.
@@ -298,6 +301,8 @@ void unique_dir_access(int opt, char *to) {
         sprintf( to, "%s/%s", testdir, unique_stat_dir );
     } else if (opt == READ_SUB_DIR) {
         sprintf( to, "%s/%s", testdir, unique_read_dir );
+    } else if (opt == RENAME_SUB_DIR) {
+        sprintf( to, "%s/%s", testdir, unique_rename_dir );
     } else if (opt == RM_SUB_DIR) {
         sprintf( to, "%s/%s", testdir, unique_rm_dir );
     } else if (opt == RM_UNI_DIR) {
@@ -646,6 +651,94 @@ void mdtest_stat(const int random, const int dirs, const long dir_iter, const ch
     }
 }
 
+/* rename all of the items created as specified by the input parameters */
+void mdtest_rename(const int random, const int dirs, const long dir_iter, const char *path, rank_progress_t * progress) {
+    uint64_t parent_dir, item_num = 0;
+    char item[MAX_PATHLEN], temp[MAX_PATHLEN];
+    char new_item[MAX_PATHLEN];
+
+    VERBOSE(1,-1,"Entering mdtest_rename on %s", path );
+
+    uint64_t stop_items = items;
+
+    if( directory_loops != 1 ){
+      stop_items = items_per_dir;
+    }
+
+    /* iterate over all of the item IDs */
+    for (uint64_t i = 0 ; i < stop_items ; ++i) {
+        /*
+         * It doesn't make sense to pass the address of the array because that would
+         * be like passing char **. Tested it on a Cray and it seems to work either
+         * way, but it seems that it is correct without the "&".
+         *
+         memset(&item, 0, MAX_PATHLEN);
+        */
+        memset(item, 0, MAX_PATHLEN);
+        memset(new_item, 0, MAX_PATHLEN);
+        memset(temp, 0, MAX_PATHLEN);
+
+
+        /* determine the item number to rename */
+        if (random) {
+            item_num = rand_array[i];
+        } else {
+            item_num = i;
+        }
+
+        /* make adjustments if in leaf only mode*/
+        if (leaf_only) {
+            item_num += items_per_dir *
+                (num_dirs_in_tree - (uint64_t) pow( branch_factor, depth ));
+        }
+
+        /* create name of file/dir to rename */
+        if (dirs) {
+            if ( (i % ITEM_COUNT == 0) && (i != 0)) {
+                VERBOSE(3,5,"rename dir: "LLU"", i);
+            }
+            sprintf(item, "dir.%s"LLU"", rename_name, item_num);
+        } else {
+            if ( (i % ITEM_COUNT == 0) && (i != 0)) {
+                VERBOSE(3,5,"rename file: "LLU"", i);
+            }
+            sprintf(item, "file.%s"LLU"", rename_name, item_num);
+        }
+
+        /* determine the path to the file/dir to be stat'ed */
+        parent_dir = item_num / items_per_dir;
+
+        if (parent_dir > 0) {        //item is not in tree's root directory
+
+            /* prepend parent directory to item's path */
+            sprintf(temp, "%s."LLU"/%s", base_tree_name, parent_dir, item);
+            strcpy(item, temp);
+
+            //still not at the tree's root dir
+            while (parent_dir > branch_factor) {
+                parent_dir = (uint64_t) ((parent_dir-1) / branch_factor);
+                sprintf(temp, "%s."LLU"/%s", base_tree_name, parent_dir, item);
+                strcpy(item, temp);
+            }
+        }
+
+        /* Now get item to have the full path */
+        sprintf( temp, "%s/%s", path, item );
+        strcpy( item, temp );
+	sprintf(new_item, "%s_new", item);
+
+        /* below temp used to be hiername */
+        VERBOSE(3,5,"mdtest_rename %4s: %s", (dirs ? "dir" : "file"), item);
+        if (-1 == backend->rename (item, new_item, backend_options)) {
+            FAIL("unable to rename %s %s", dirs ? "directory" : "file", item);
+        }
+
+        if (-1 == backend->rename (new_item, item, backend_options)) {
+            FAIL("unable to rename %s %s", dirs ? "directory" : "file", item);
+        }
+    }
+}
+
 /* reads all of the items created as specified by the input parameters */
 void mdtest_read(int random, int dirs, const long dir_iter, char *path) {
     uint64_t parent_dir, item_num = 0;
@@ -786,7 +879,8 @@ void collective_create_remove(const int create, const int dirs, const int ntasks
             sprintf(mk_name, "mdtest.%d.", (i+(0*nstride))%ntasks);
             sprintf(stat_name, "mdtest.%d.", (i+(1*nstride))%ntasks);
             sprintf(read_name, "mdtest.%d.", (i+(2*nstride))%ntasks);
-            sprintf(rm_name, "mdtest.%d.", (i+(3*nstride))%ntasks);
+            sprintf(rename_name, "mdtest.%d.", (i+(3*nstride))%ntasks);
+            sprintf(rm_name, "mdtest.%d.", (i+(4*nstride))%ntasks);
         }
         if (unique_dir_per_task) {
             VERBOSE(3,5,"i %d nstride %d ntasks %d", i, nstride, ntasks);
@@ -798,8 +892,10 @@ void collective_create_remove(const int create, const int dirs, const int ntasks
                     (i+(2*nstride))%ntasks);
             sprintf(unique_read_dir, "%s/mdtest_tree.%d.0", testdir,
                     (i+(3*nstride))%ntasks);
-            sprintf(unique_rm_dir, "%s/mdtest_tree.%d.0", testdir,
+            sprintf(unique_rename_dir, "%s/mdtest_tree.%d.0", testdir,
                     (i+(4*nstride))%ntasks);
+            sprintf(unique_rm_dir, "%s/mdtest_tree.%d.0", testdir,
+                    (i+(5*nstride))%ntasks);
             sprintf(unique_rm_uni_dir, "%s", testdir);
         }
 
@@ -819,7 +915,8 @@ void collective_create_remove(const int create, const int dirs, const int ntasks
         sprintf(mk_name, "mdtest.%d.", (0+(0*nstride))%ntasks);
         sprintf(stat_name, "mdtest.%d.", (0+(1*nstride))%ntasks);
         sprintf(read_name, "mdtest.%d.", (0+(2*nstride))%ntasks);
-        sprintf(rm_name, "mdtest.%d.", (0+(3*nstride))%ntasks);
+        sprintf(rename_name, "mdtest.%d.", (0+(3*nstride))%ntasks);
+        sprintf(rm_name, "mdtest.%d.", (0+(4*nstride))%ntasks);
     }
     if (unique_dir_per_task) {
         sprintf(unique_mk_dir, "%s/mdtest_tree.%d.0", testdir,
@@ -830,15 +927,17 @@ void collective_create_remove(const int create, const int dirs, const int ntasks
                 (0+(2*nstride))%ntasks);
         sprintf(unique_read_dir, "%s/mdtest_tree.%d.0", testdir,
                 (0+(3*nstride))%ntasks);
-        sprintf(unique_rm_dir, "%s/mdtest_tree.%d.0", testdir,
+        sprintf(unique_rename_dir, "%s/mdtest_tree.%d.0", testdir,
                 (0+(4*nstride))%ntasks);
+        sprintf(unique_rm_dir, "%s/mdtest_tree.%d.0", testdir,
+                (0+(5*nstride))%ntasks);
         sprintf(unique_rm_uni_dir, "%s", testdir);
     }
 }
 
 void directory_test(const int iteration, const int ntasks, const char *path, rank_progress_t * progress) {
     int size;
-    double t[5] = {0};
+    double t[6] = {0};
     char temp_path[MAX_PATHLEN];
 
     MPI_Comm_size(testComm, &size);
@@ -935,13 +1034,39 @@ void directory_test(const int iteration, const int ntasks, const char *path, ran
     phase_end();
     t[3] = GetTimeStamp();
 
+    if (rename_only) {
+      for (int dir_iter = 0; dir_iter < directory_loops; dir_iter ++){
+        prep_testdir(iteration, dir_iter);
+        if (unique_dir_per_task) {
+            unique_dir_access(RENAME_SUB_DIR, temp_path);
+            if (!time_unique_dir_overhead) {
+                offset_timers(t, 3);
+            }
+        } else {
+            sprintf( temp_path, "%s/%s", testdir, path );
+        }
+
+        VERBOSE(3,5,"rename path is '%s'", temp_path );
+
+        /* stat directories */
+        if (random_seed > 0) {
+            mdtest_rename(1, 1, dir_iter, temp_path, progress);
+        } else {
+            mdtest_rename(0, 1, dir_iter, temp_path, progress);
+        }
+      }
+    }
+
+    phase_end();
+    t[4] = GetTimeStamp();
+
     if (remove_only) {
       for (int dir_iter = 0; dir_iter < directory_loops; dir_iter ++){
         prep_testdir(iteration, dir_iter);
         if (unique_dir_per_task) {
             unique_dir_access(RM_SUB_DIR, temp_path);
             if (!time_unique_dir_overhead) {
-                offset_timers(t, 3);
+                offset_timers(t, 4);
             }
         } else {
             sprintf( temp_path, "%s/%s", testdir, path );
@@ -961,7 +1086,7 @@ void directory_test(const int iteration, const int ntasks, const char *path, ran
     }
 
     phase_end();
-    t[4] = GetTimeStamp();
+    t[5] = GetTimeStamp();
 
     if (remove_only) {
         if (unique_dir_per_task) {
@@ -974,7 +1099,7 @@ void directory_test(const int iteration, const int ntasks, const char *path, ran
     }
 
     if (unique_dir_per_task && !time_unique_dir_overhead) {
-        offset_timers(t, 4);
+        offset_timers(t, 5);
     }
 
     /* calculate times */
@@ -996,11 +1121,17 @@ void directory_test(const int iteration, const int ntasks, const char *path, ran
         summary_table[iteration].items[2] = items*size;
         summary_table[iteration].stonewall_last_item[2] = items;
     }
-    if (remove_only) {
-        summary_table[iteration].rate[3] = items*size/(t[4] - t[3]);
-        summary_table[iteration].time[3] = t[4] - t[3];
+    if (rename_only) {
+        summary_table[iteration].rate[3] = 2*items*size/(t[4] - t[3]);
+        summary_table[iteration].time[3] = (t[4] - t[3])/2;
         summary_table[iteration].items[3] = items*size;
         summary_table[iteration].stonewall_last_item[3] = items;
+    }
+    if (remove_only) {
+        summary_table[iteration].rate[4] = items*size/(t[5] - t[4]);
+        summary_table[iteration].time[4] = t[5] - t[4];
+        summary_table[iteration].items[4] = items*size;
+        summary_table[iteration].stonewall_last_item[4] = items;
     }
 
     VERBOSE(1,-1,"   Directory creation: %14.3f sec, %14.3f ops/sec", t[1] - t[0], summary_table[iteration].rate[0]);
@@ -1008,7 +1139,8 @@ void directory_test(const int iteration, const int ntasks, const char *path, ran
     /* N/A
     VERBOSE(1,-1,"   Directory read    : %14.3f sec, %14.3f ops/sec", t[3] - t[2], summary_table[iteration].rate[2]);
     */
-    VERBOSE(1,-1,"   Directory removal : %14.3f sec, %14.3f ops/sec", t[4] - t[3], summary_table[iteration].rate[3]);
+    VERBOSE(1,-1,"   Directory rename    : %14.3f sec, %14.3f ops/sec", (t[4] - t[3])/2, summary_table[iteration].rate[3]);
+    VERBOSE(1,-1,"   Directory removal : %14.3f sec, %14.3f ops/sec", t[5] - t[4], summary_table[iteration].rate[4]);
 }
 
 /* Returns if the stonewall was hit */
@@ -1041,7 +1173,7 @@ int updateStoneWallIterations(int iteration, rank_progress_t * progress, double 
 
 void file_test(const int iteration, const int ntasks, const char *path, rank_progress_t * progress) {
     int size;
-    double t[5] = {0};
+    double t[6] = {0};
     char temp_path[MAX_PATHLEN];
     MPI_Comm_size(testComm, &size);
 
@@ -1171,6 +1303,28 @@ void file_test(const int iteration, const int ntasks, const char *path, rank_pro
     phase_end();
     t[3] = GetTimeStamp();
 
+    if (rename_only) {
+      for (int dir_iter = 0; dir_iter < directory_loops; dir_iter ++){
+        prep_testdir(iteration, dir_iter);
+        if (unique_dir_per_task) {
+            unique_dir_access(RENAME_SUB_DIR, temp_path);
+            if (!time_unique_dir_overhead) {
+                offset_timers(t, 3);
+            }
+        } else {
+            sprintf( temp_path, "%s/%s", testdir, path );
+        }
+
+        VERBOSE(3,5,"file_test: rename path is '%s'", temp_path );
+
+        /* stat files */
+        mdtest_rename((random_seed > 0 ? 1 : 0), 0, dir_iter, temp_path, progress);
+      }
+    }
+
+    phase_end();
+    t[4] = GetTimeStamp();
+
     if (remove_only) {
       progress->items_start = 0;
 
@@ -1179,7 +1333,7 @@ void file_test(const int iteration, const int ntasks, const char *path, rank_pro
         if (unique_dir_per_task) {
             unique_dir_access(RM_SUB_DIR, temp_path);
             if (!time_unique_dir_overhead) {
-                offset_timers(t, 3);
+                offset_timers(t, 4);
             }
         } else {
             sprintf( temp_path, "%s/%s", testdir, path );
@@ -1199,7 +1353,8 @@ void file_test(const int iteration, const int ntasks, const char *path, rank_pro
     }
 
     phase_end();
-    t[4] = GetTimeStamp();
+    t[5] = GetTimeStamp();
+
     if (remove_only) {
         if (unique_dir_per_task) {
             unique_dir_access(RM_UNI_DIR, temp_path);
@@ -1211,7 +1366,7 @@ void file_test(const int iteration, const int ntasks, const char *path, rank_pro
     }
 
     if (unique_dir_per_task && !time_unique_dir_overhead) {
-        offset_timers(t, 4);
+        offset_timers(t, 5);
     }
 
     if(num_dirs_in_tree_calc){ /* this is temporary fix needed when using -n and -i together */
@@ -1220,37 +1375,44 @@ void file_test(const int iteration, const int ntasks, const char *path, rank_pro
 
     /* calculate times */
     if (create_only) {
-        summary_table[iteration].rate[4] = items*size/(t[1] - t[0]);
-        summary_table[iteration].time[4] = t[1] - t[0];
-        summary_table[iteration].items[4] = items*size;
-        summary_table[iteration].stonewall_last_item[4] = items;
-    }
-    if (stat_only) {
-        summary_table[iteration].rate[5] = items*size/(t[2] - t[1]);
-        summary_table[iteration].time[5] = t[2] - t[1];
+        summary_table[iteration].rate[5] = items*size/(t[1] - t[0]);
+        summary_table[iteration].time[5] = t[1] - t[0];
         summary_table[iteration].items[5] = items*size;
         summary_table[iteration].stonewall_last_item[5] = items;
     }
-    if (read_only) {
-        summary_table[iteration].rate[6] = items*size/(t[3] - t[2]);
-        summary_table[iteration].time[6] = t[3] - t[2];
+    if (stat_only) {
+        summary_table[iteration].rate[6] = items*size/(t[2] - t[1]);
+        summary_table[iteration].time[6] = t[2] - t[1];
         summary_table[iteration].items[6] = items*size;
         summary_table[iteration].stonewall_last_item[6] = items;
     }
-    if (remove_only) {
-        summary_table[iteration].rate[7] = items*size/(t[4] - t[3]);
-        summary_table[iteration].time[7] = t[4] - t[3];
+    if (read_only) {
+        summary_table[iteration].rate[7] = items*size/(t[3] - t[2]);
+        summary_table[iteration].time[7] = t[3] - t[2];
         summary_table[iteration].items[7] = items*size;
         summary_table[iteration].stonewall_last_item[7] = items;
     }
+    if (rename_only) {
+        summary_table[iteration].rate[8] = 2*items*size/(t[4] - t[3]);
+        summary_table[iteration].time[8] = (t[4] - t[3])/2;
+        summary_table[iteration].items[8] = items*size;
+        summary_table[iteration].stonewall_last_item[8] = items;
+    }
+    if (remove_only) {
+        summary_table[iteration].rate[9] = items*size/(t[5] - t[4]);
+        summary_table[iteration].time[9] = t[5] - t[4];
+        summary_table[iteration].items[9] = items*size;
+        summary_table[iteration].stonewall_last_item[9] = items;
+    }
 
-    VERBOSE(1,-1,"  File creation     : %14.3f sec, %14.3f ops/sec", t[1] - t[0], summary_table[iteration].rate[4]);
+    VERBOSE(1,-1,"  File creation     : %14.3f sec, %14.3f ops/sec", t[1] - t[0], summary_table[iteration].rate[5]);
     if(summary_table[iteration].stonewall_time[MDTEST_FILE_CREATE_NUM]){
       VERBOSE(1,-1,"  File creation (stonewall): %14.3f sec, %14.3f ops/sec", summary_table[iteration].stonewall_time[MDTEST_FILE_CREATE_NUM], summary_table[iteration].stonewall_item_sum[MDTEST_FILE_CREATE_NUM]);
     }
-    VERBOSE(1,-1,"  File stat         : %14.3f sec, %14.3f ops/sec", t[2] - t[1], summary_table[iteration].rate[5]);
-    VERBOSE(1,-1,"  File read         : %14.3f sec, %14.3f ops/sec", t[3] - t[2], summary_table[iteration].rate[6]);
-    VERBOSE(1,-1,"  File removal      : %14.3f sec, %14.3f ops/sec", t[4] - t[3], summary_table[iteration].rate[7]);
+    VERBOSE(1,-1,"  File stat         : %14.3f sec, %14.3f ops/sec", t[2] - t[1], summary_table[iteration].rate[6]);
+    VERBOSE(1,-1,"  File read         : %14.3f sec, %14.3f ops/sec", t[3] - t[2], summary_table[iteration].rate[7]);
+    VERBOSE(1,-1,"  File rename       : %14.3f sec, %14.3f ops/sec", (t[4] - t[3])/2, summary_table[iteration].rate[8]);
+    VERBOSE(1,-1,"  File removal      : %14.3f sec, %14.3f ops/sec", t[5] - t[4], summary_table[iteration].rate[9]);
 }
 
 void summarize_results(int iterations, int print_time) {
@@ -1281,18 +1443,18 @@ void summarize_results(int iterations, int print_time) {
     VERBOSE(0,-1,"   Operation                      Max            Min           Mean        Std Dev");
     VERBOSE(0,-1,"   ---------                      ---            ---           ----        -------");
 
-    /* if files only access, skip entries 0-3 (the dir tests) */
+    /* if files only access, skip entries 0-4 (the dir tests) */
     if (files_only && !dirs_only) {
-        start = 4;
+        start = 5;
     } else {
         start = 0;
     }
 
-    /* if directories only access, skip entries 4-7 (the file tests) */
+    /* if directories only access, skip entries 5-9 (the file tests) */
     if (dirs_only && !files_only) {
-        stop = 4;
+        stop = 5;
     } else {
-        stop = 8;
+        stop = 10;
     }
 
     /* special case: if no directory or file tests, skip all */
@@ -1329,11 +1491,13 @@ void summarize_results(int iterations, int print_time) {
             case 1: strcpy(access, "Directory stat            :"); break;
                 /* case 2: strcpy(access, "Directory read    :"); break; */
             case 2: ;                                      break; /* N/A */
-            case 3: strcpy(access, "Directory removal         :"); break;
-            case 4: strcpy(access, "File creation             :"); break;
-            case 5: strcpy(access, "File stat                 :"); break;
-            case 6: strcpy(access, "File read                 :"); break;
-            case 7: strcpy(access, "File removal              :"); break;
+            case 3: strcpy(access, "Directory rename          :"); break;
+            case 4: strcpy(access, "Directory removal         :"); break;
+            case 5: strcpy(access, "File creation             :"); break;
+            case 6: strcpy(access, "File stat                 :"); break;
+            case 7: strcpy(access, "File read                 :"); break;
+            case 8: strcpy(access, "File rename               :"); break;
+            case 9: strcpy(access, "File removal              :"); break;
             default: strcpy(access, "ERR");                 break;
             }
             if (i != 2) {
@@ -1363,7 +1527,7 @@ void summarize_results(int iterations, int print_time) {
     }
 
     /* calculate tree create/remove rates */
-    for (i = 8; i < tableSize; i++) {
+    for (i = 10; i < tableSize; i++) {
         min = max = all[i];
         for (j = 0; j < iterations; j++) {
             if(print_time){
@@ -1393,8 +1557,8 @@ void summarize_results(int iterations, int print_time) {
         var = var / (iterations);
         sd = sqrt(var);
         switch (i) {
-        case 8: strcpy(access, "Tree creation             :"); break;
-        case 9: strcpy(access, "Tree removal              :"); break;
+        case 10: strcpy(access, "Tree creation             :"); break;
+        case 11: strcpy(access, "Tree removal              :"); break;
         default: strcpy(access, "ERR");                 break;
         }
         fprintf(out_logfile, "   %s ", access);
@@ -1414,8 +1578,8 @@ void md_validate_tests() {
         FAIL( "Error, stone wall timer does only work with a branch factor <= 1 (current is %d) and with barriers\n", branch_factor);
     }
 
-    if (!create_only && !stat_only && !read_only && !remove_only) {
-        create_only = stat_only = read_only = remove_only = 1;
+    if (!create_only && !stat_only && !read_only && !rename_only && !remove_only) {
+        create_only = stat_only = read_only = rename_only = remove_only = 1;
         VERBOSE(1,-1,"main: Setting create/stat/read/remove_only to True" );
     }
 
@@ -1758,6 +1922,7 @@ static void mdtest_iteration(int i, int j, MPI_Group testgroup, mdtest_results_t
   sprintf(unique_chdir_dir, "%s.0", base_tree_name);
   sprintf(unique_stat_dir, "%s.0", base_tree_name);
   sprintf(unique_read_dir, "%s.0", base_tree_name);
+  sprintf(unique_rename_dir, "%s.0", base_tree_name);
   sprintf(unique_rm_dir, "%s.0", base_tree_name);
   unique_rm_uni_dir[0] = 0;
 
@@ -1770,7 +1935,8 @@ static void mdtest_iteration(int i, int j, MPI_Group testgroup, mdtest_results_t
           sprintf(mk_name, "mdtest.%d.", (rank+(0*nstride))%i);
           sprintf(stat_name, "mdtest.%d.", (rank+(1*nstride))%i);
           sprintf(read_name, "mdtest.%d.", (rank+(2*nstride))%i);
-          sprintf(rm_name, "mdtest.%d.", (rank+(3*nstride))%i);
+          sprintf(rename_name, "mdtest.%d.", (rank+(3*nstride))%i);
+          sprintf(rm_name, "mdtest.%d.", (rank+(4*nstride))%i);
       }
       if (unique_dir_per_task) {
           VERBOSE(3,5,"i %d nstride %d", i, nstride);
@@ -1778,9 +1944,10 @@ static void mdtest_iteration(int i, int j, MPI_Group testgroup, mdtest_results_t
           sprintf(unique_chdir_dir, "mdtest_tree.%d.0", (rank+(1*nstride))%i);
           sprintf(unique_stat_dir, "mdtest_tree.%d.0", (rank+(2*nstride))%i);
           sprintf(unique_read_dir, "mdtest_tree.%d.0", (rank+(3*nstride))%i);
-          sprintf(unique_rm_dir, "mdtest_tree.%d.0", (rank+(4*nstride))%i);
+          sprintf(unique_rename_dir, "mdtest_tree.%d.0", (rank+(4*nstride))%i);
+          sprintf(unique_rm_dir, "mdtest_tree.%d.0", (rank+(5*nstride))%i);
           unique_rm_uni_dir[0] = 0;
-          VERBOSE(5,5,"mk_dir %s chdir %s stat_dir %s read_dir %s rm_dir %s\n", unique_mk_dir,unique_chdir_dir,unique_stat_dir,unique_read_dir,unique_rm_dir);
+          VERBOSE(5,5,"mk_dir %s chdir %s stat_dir %s read_dir %s rm_dir %s\n", unique_mk_dir,unique_chdir_dir,unique_stat_dir,unique_read_dir,unique_rename_dir,unique_rm_dir);
       }
 
       VERBOSE(3,-1,"V-3: main: Copied unique_mk_dir, '%s', to topdir", unique_mk_dir );
@@ -1885,6 +2052,7 @@ void mdtest_init_args(){
    stoneWallingStatusFile = NULL;
    create_only = 0;
    stat_only = 0;
+   rename_only = 0;
    read_only = 0;
    verify_read = 0;
    verification_error = 0;
@@ -1959,6 +2127,7 @@ mdtest_results_t * mdtest_run(int argc, char **argv, MPI_Comm world_com, FILE * 
       {'B', NULL,        "no barriers between phases", OPTION_OPTIONAL_ARGUMENT, 'd', & no_barriers},
       {'C', NULL,        "only create files/dirs", OPTION_FLAG, 'd', & create_only},
       {'T', NULL,        "only stat files/dirs", OPTION_FLAG, 'd', & stat_only},
+      {'A', NULL,        "only rename files/dirs", OPTION_FLAG, 'd', & rename_only},
       {'E', NULL,        "only read files/dir", OPTION_FLAG, 'd', & read_only},
       {'r', NULL,        "only remove files or directories left behind by previous runs", OPTION_FLAG, 'd', & remove_only},
       {'D', NULL,        "perform test on directories only (no files)", OPTION_FLAG, 'd', & dirs_only},
@@ -2091,6 +2260,7 @@ mdtest_results_t * mdtest_run(int argc, char **argv, MPI_Comm world_com, FILE * 
     VERBOSE(1,-1, "time_unique_dir_overhead: %s", ( time_unique_dir_overhead ? "True" : "False" ));
     VERBOSE(1,-1, "stone_wall_timer_seconds: %d", stone_wall_timer_seconds);
     VERBOSE(1,-1, "stat_only               : %s", ( stat_only ? "True" : "False" ));
+    VERBOSE(1,-1, "rename_only             : %s", ( rename_only ? "True" : "False" ));
     VERBOSE(1,-1, "unique_dir_per_task     : %s", ( unique_dir_per_task ? "True" : "False" ));
     VERBOSE(1,-1, "write_bytes             : "LLU"", write_bytes );
     VERBOSE(1,-1, "sync_file               : %s", ( sync_file ? "True" : "False" ));
@@ -2258,6 +2428,7 @@ mdtest_results_t * mdtest_run(int argc, char **argv, MPI_Comm world_com, FILE * 
     strcpy(mk_name, "mdtest.shared.");
     strcpy(stat_name, "mdtest.shared.");
     strcpy(read_name, "mdtest.shared.");
+    strcpy(rename_name, "mdtest.shared.");
     strcpy(rm_name, "mdtest.shared.");
 
     MPI_Comm_group(testComm, &worldgroup);
