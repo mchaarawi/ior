@@ -1004,6 +1004,7 @@ void directory_test(const int iteration, const int ntasks, const char *path, ran
         }
       }
     }
+
     phase_end();
     t[2] = GetTimeStamp();
 
@@ -1910,12 +1911,12 @@ static void mdtest_iteration(int i, int j, MPI_Group testgroup, mdtest_results_t
       }
       MPI_Barrier(testComm);
       endCreate = GetTimeStamp();
-      summary_table->rate[8] =
+      summary_table->rate[10] =
           num_dirs_in_tree / (endCreate - startCreate);
-      summary_table->time[8] = (endCreate - startCreate);
-      summary_table->items[8] = num_dirs_in_tree;
-      summary_table->stonewall_last_item[8] = num_dirs_in_tree;
-      VERBOSE(1,-1,"V-1: main:   Tree creation     : %14.3f sec, %14.3f ops/sec", (endCreate - startCreate), summary_table->rate[8]);
+      summary_table->time[10] = (endCreate - startCreate);
+      summary_table->items[10] = num_dirs_in_tree;
+      summary_table->stonewall_last_item[10] = num_dirs_in_tree;
+      VERBOSE(1,-1,"V-1: main:   Tree creation     : %14.3f sec, %14.3f ops/sec", (endCreate - startCreate), summary_table->rate[10]);
   }
 
   sprintf(unique_mk_dir, "%s.0", base_tree_name);
@@ -2024,11 +2025,11 @@ static void mdtest_iteration(int i, int j, MPI_Group testgroup, mdtest_results_t
 
       MPI_Barrier(testComm);
       endCreate = GetTimeStamp();
-      summary_table->rate[9] = num_dirs_in_tree / (endCreate - startCreate);
-      summary_table->time[9] = endCreate - startCreate;
-      summary_table->items[9] = num_dirs_in_tree;
-      summary_table->stonewall_last_item[8] = num_dirs_in_tree;
-      VERBOSE(1,-1,"main   Tree removal      : %14.3f sec, %14.3f ops/sec", (endCreate - startCreate), summary_table->rate[9]);
+      summary_table->rate[11] = num_dirs_in_tree / (endCreate - startCreate);
+      summary_table->time[11] = endCreate - startCreate;
+      summary_table->items[11] = num_dirs_in_tree;
+      summary_table->stonewall_last_item[10] = num_dirs_in_tree;
+      VERBOSE(1,-1,"main   Tree removal      : %14.3f sec, %14.3f ops/sec", (endCreate - startCreate), summary_table->rate[11]);
       VERBOSE(2,-1,"main (at end of for j loop): Removing testdir of '%s'\n", testdir );
 
       for (int dir_iter = 0; dir_iter < directory_loops; dir_iter ++){
@@ -2041,7 +2042,7 @@ static void mdtest_iteration(int i, int j, MPI_Group testgroup, mdtest_results_t
         }
       }
   } else {
-      summary_table->rate[9] = 0;
+      summary_table->rate[11] = 0;
   }
 }
 
