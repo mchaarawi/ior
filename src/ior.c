@@ -349,8 +349,7 @@ static void CheckFileSize(IOR_test_t *test, char * testFilename, IOR_offset_t da
                                 1, MPI_LONG_LONG_INT, MPI_SUM, testComm),
                   "cannot total data moved");
 
-        if (strcasecmp(params->api, "HDF5") != 0 && strcasecmp(params->api, "NCMPI") != 0 &&
-            strcasecmp(params->api, "DAOS") != 0) {
+        if (strcasecmp(params->api, "HDF5") != 0 && strcasecmp(params->api, "NCMPI") != 0) {
                 if (verbose >= VERBOSE_0 && rank == 0) {
                         if ((params->expectedAggFileSize
                              != point->aggFileSizeFromXfer)
@@ -1294,6 +1293,17 @@ static void TestIoSys(IOR_test_t *test)
 
         /* loop over test iterations */
         uint64_t params_saved_wearout = params->stoneWallingWearOutIterations;
+
+        /* Check if the file exists and warn users */
+        if( params->hints.filePerProc || rank == 0){
+          struct stat sb;
+          GetTestFileName(testFileName, params);
+          int ret = backend->stat(testFileName, & sb, params->backend_options);
+          if(ret == 0) {
+            EWARNF("The file \"%s\" exists already and will be overwritten", testFileName);
+          }
+        }
+
         for (rep = 0; rep < params->repetitions; rep++) {
                 /* Get iteration start time in seconds in task 0 and broadcast to
                    all tasks */
@@ -1609,7 +1619,6 @@ static void ValidateTests(IOR_param_t * test)
             && (strcasecmp(test->api, "MMAP") != 0)
             && (strcasecmp(test->api, "HDFS") != 0)
             && (strcasecmp(test->api, "DFS") != 0)
-            && (strcasecmp(test->api, "DAOS") != 0)
             && (strcasecmp(test->api, "Gfarm") != 0)
             && (strcasecmp(test->api, "RADOS") != 0)
             && (strcasecmp(test->api, "CEPHFS") != 0)) && test->fsync)
@@ -1624,8 +1633,8 @@ static void ValidateTests(IOR_param_t * test)
         if (test->randomOffset && test->reorderTasks
             && test->filePerProc == FALSE)
                 ERR("random offset and constant reorder tasks specified with single-shared-file. Choose one and resubmit");
-        if (test->randomOffset && test->checkRead)
-                ERR("random offset not available with read check option (use write check)");
+        if (test->randomOffset && test->checkRead && test->randomSeed == -1)
+                ERR("random offset with read check option requires to set the random seed");
         if (test->randomOffset && test->storeFileOffset)
                 ERR("random offset not available with store file offset option)");
         if ((strcasecmp(test->api, "HDF5") == 0) && test->randomOffset)
@@ -1711,11 +1720,11 @@ IOR_offset_t *GetOffsetArrayRandom(IOR_param_t * test, int pretendRank, int acce
         IOR_offset_t fileSize;
         IOR_offset_t *offsetArray;
 
-        /* set up seed for random() */
-        if (access == WRITE || access == READ) {
+        /* set up seed, each process can determine which regions to access individually */
+        if (test->randomSeed == -1) {
                 test->randomSeed = seed = rand();
         } else {
-                seed = test->randomSeed;
+                seed = test->randomSeed + pretendRank;
         }
         srand(seed);
 
@@ -1725,16 +1734,16 @@ IOR_offset_t *GetOffsetArrayRandom(IOR_param_t * test, int pretendRank, int acce
         }
 
         /* count needed offsets (pass 1) */
-        for (i = 0; i < fileSize; i += test->transferSize) {
-                if (test->filePerProc == FALSE) {
+        if (test->filePerProc == FALSE) {
+          for (i = 0; i < fileSize; i += test->transferSize) {
                         // this counts which process get how many transferes in
                         // a shared file
                         if ((rand() % test->numTasks) == pretendRank) {
                                 offsets++;
                         }
-                } else {
-                        offsets++;
-                }
+          }
+        } else {
+          offsets += fileSize / test->transferSize;
         }
 
         /* setup empty array */
@@ -1751,7 +1760,7 @@ IOR_offset_t *GetOffsetArrayRandom(IOR_param_t * test, int pretendRank, int acce
                 }
         } else {
                 /* fill with offsets (pass 2) */
-                srand(seed);  /* need same seed  to get same transfers as counted in the beginning*/
+                srand(seed);  /* need same seedto get same transfers as counted in the beginning*/
                 for (i = 0; i < fileSize; i += test->transferSize) {
                         if ((rand() % test->numTasks) == pretendRank) {
                                 offsetArray[offsetCnt] = i;

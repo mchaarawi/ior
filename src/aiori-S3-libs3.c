@@ -86,9 +86,14 @@ static void def_file_name(s3_options_t * o, char * out_name, char const * path){
     }else if(c >= 'A' && c <= 'Z'){
       *out_name = *path + ('a' - 'A');
       out_name++;
+    }else if(c == '/'){
+      *out_name = '_';
+      out_name++;
     }
     path++;
   }
+  *out_name = '-';
+  out_name++;
   *out_name = '\0';
 }
 
@@ -451,6 +456,16 @@ static IOR_offset_t S3_GetFileSize(aiori_mod_opt_t * options, char *testFileName
 
 
 static int S3_check_params(aiori_mod_opt_t * options){
+  s3_options_t * o = (s3_options_t*) options;
+  if(o->access_key == NULL){
+    o->access_key = "";
+  }
+  if(o->secret_key == NULL){
+    o->secret_key = "";
+  }
+  if(o->host == NULL){
+    WARN("The S3 hostname should be specified");
+  }
   return 0;
 }
 

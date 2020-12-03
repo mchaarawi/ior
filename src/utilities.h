@@ -30,13 +30,7 @@ extern enum OutputFormat_t outputFormat;  /* format of the output */
  * Try using the system's PATH_MAX, which is what realpath and such use.
  */
 #define MAX_PATHLEN PATH_MAX
-
-
-#ifdef __linux__
 #define ERROR_LOCATION __func__
-#else
-#define ERROR_LOCATION __LINE__
-#endif
 
 
 void* safeMalloc(uint64_t size);
@@ -44,7 +38,7 @@ void set_o_direct_flag(int *fd);
 
 char *CurrentTimeString(void);
 int Regex(char *, char *);
-void ShowFileSystemSize(IOR_param_t * test);
+void ShowFileSystemSize(char * filename, const struct ior_aiori * backend, void * backend_options);
 void DumpBuffer(void *, size_t);
 void SeedRandGen(MPI_Comm);
 void SetHints (MPI_Info *, char *);
